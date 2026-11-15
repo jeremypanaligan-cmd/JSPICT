@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>JSP Extender Control</title>
+  <meta name="description" content="Manage 30-day Wi-Fi extender subscriptions and Tapo P100 power control." />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Extender Control" />
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+
+  <!-- ============ Inline icon sprite (works offline, no CDN) ============ -->
+  <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/></symbol>
+    <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/><path d="m2 2 20 20"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  </svg>
+
+  <!-- ============ Login / auth ============ -->
+  <section id="login-view" class="auth-view hidden">
+    <div class="auth-card">
+      <div class="brand brand--lg">
+        <span class="brand__mark"><svg class="icon"><use href="#i-wifi" /></svg></span>
+        <span class="brand__text">
+          <strong>JSP Extender Control</strong>
+          <small>30-day subscription manager</small>
+        </span>
+      </div>
+
+      <div class="auth-heading">
+        <h1>Admin sign in</h1>
+        <p>Manage extenders, renewals and Tapo P100 power from anywhere.</p>
+      </div>
+
+      <form id="login-form" class="stack" novalidate>
+        <div class="field">
+          <label class="field__label" for="login-username">Username</label>
+          <input id="login-username" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="jeremyp" required />
+        </div>
+        <div class="field">
+          <label class="field__label" for="login-password">Password</label>
+          <input id="login-password" type="password" name="password" autocomplete="current-password" placeholder="••••••••" required />
+        </div>
+        <p id="login-error" class="form-error hidden"></p>
+        <button id="login-submit" class="btn btn--primary btn--block" type="submit">Sign in</button>
+      </form>
+
+      <button id="login-config-btn" class="btn btn--ghost btn--block btn--sm" type="button">
+        <svg class="icon"><use href="#i-settings" /></svg>
+        Google Sheets API configuration
+      </button>
+      <p class="auth-foot">
+        <svg class="icon"><use href="#i-shield" /></svg>
+        Signed in via Apps Script · sheet stays private
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ App ============ -->
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <span class="brand__mark"><svg class="icon"><use href="#i-wifi" /></svg></span>
+          <span class="brand__text">
+            <strong>Extender Control</strong>
+            <small>30-day subscriptions</small>
+          </span>
+        </div>
+
+        <div class="topbar__actions">
+          <span id="bridge-summary" class="chip chip--warn">
+            <svg class="icon"><use href="#i-wifi" /></svg>
+            <span>Bridge</span>
+          </span>
+          <span id="user-email" class="chip hide-sm"></span>
+          <button id="btn-refresh" class="icon-btn" type="button" title="Refresh" aria-label="Refresh">
+            <svg class="icon"><use href="#i-refresh" /></svg>
+          </button>
+          <button id="btn-history" class="icon-btn" type="button" title="Renewal history" aria-label="Renewal history">
+            <svg class="icon"><use href="#i-history" /></svg>
+          </button>
+          <button id="btn-add" class="btn btn--primary btn--sm" type="button">
+            <svg class="icon"><use href="#i-plus" /></svg>
+            <span class="hide-sm">Add extender</span>
+          </button>
+          <button id="btn-settings" class="icon-btn" type="button" title="Settings" aria-label="Settings">
+            <svg class="icon"><use href="#i-settings" /></svg>
+          </button>
+          <button id="btn-signout" class="icon-btn" type="button" title="Sign out" aria-label="Sign out">
+            <svg class="icon"><use href="#i-logout" /></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="cards" class="cards"></div>
+
+      <div id="empty-state" class="empty hidden">
+        <span class="empty__icon"><svg class="icon"><use href="#i-plug" /></svg></span>
+        <h2>No extenders yet</h2>
+        <p>Register your first Tapo P100 plug to start tracking its 30-day subscription.</p>
+        <button class="btn btn--primary" type="button" data-add-extender>
+          <svg class="icon"><use href="#i-plus" /></svg>
+          Add extender
+        </button>
+      </div>
+
+      <footer class="app-foot">
+        <span id="sync-state">Live sync ready</span>
+        <span class="app-foot__dot"></span>
+        <span>Bridge polls every 20s</span>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ============ Renew modal ============ -->
+  <div class="modal" id="renew-modal" role="dialog" aria-modal="true" aria-labelledby="renew-title" aria-hidden="true">
+    <div class="modal__card">
+      <div class="modal__head">
+        <div>
+          <h2 id="renew-title" class="modal__title">Renew subscription</h2>
+          <p id="renew-device" class="modal__sub">Extender</p>
+        </div>
+        <button class="icon-btn" type="button" data-close="renew-modal" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+
+      <form id="renew-form" class="modal__body" novalidate>
+        <div class="field-row">
+          <div class="field">
+            <span class="field__label">Current expiry</span>
+            <span id="renew-current" class="field__value">—</span>
+          </div>
+          <div class="field">
+            <span class="field__label">Renewal length</span>
+            <span class="field__value">30 days</span>
+          </div>
+        </div>
+
+        <fieldset class="radio-group" id="renew-modes">
+          <legend class="field__label">Renewal base</legend>
+          <label class="radio">
+            <input type="radio" name="renew-mode" id="renew-mode-extend" value="extend" checked />
+            <span>
+              <strong>Extend current expiry</strong>
+              <small id="renew-extend-hint">Adds 30 days to the existing expiry.</small>
+            </span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="renew-mode" id="renew-mode-reset" value="reset" />
+            <span>
+              <strong>Reset from today</strong>
+              <small>Starts a fresh 30-day period from now.</small>
+            </span>
+          </label>
+        </fieldset>
+
+        <div class="field">
+          <label class="field__label" for="renew-amount">Amount paid (optional)</label>
+          <div class="input-prefix">
+            <span>₱</span>
+            <input id="renew-amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" />
+          </div>
+        </div>
+
+        <div class="renew-preview">
+          <span>New expiry</span>
+          <strong id="renew-preview">—</strong>
+        </div>
+
+        <p id="renew-error" class="form-error hidden"></p>
+
+        <div class="modal__actions">
+          <button class="btn btn--ghost" type="button" data-close="renew-modal">Cancel</button>
+          <button class="btn btn--primary" type="submit" id="renew-submit">Confirm renewal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ Add / edit extender modal ============ -->
+  <div class="modal" id="extender-modal" role="dialog" aria-modal="true" aria-labelledby="extender-title" aria-hidden="true">
+    <div class="modal__card">
+      <div class="modal__head">
+        <div>
+          <h2 id="extender-title" class="modal__title">Add extender</h2>
+          <p class="modal__sub">Tapo P100 on your local network</p>
+        </div>
+        <button class="icon-btn" type="button" data-close="extender-modal" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+
+      <form id="extender-form" class="modal__body" novalidate>
+        <div class="field">
+          <label class="field__label" for="ext-name">Device name</label>
+          <input id="ext-name" type="text" placeholder="Extender Unit 1" maxlength="80" required />
+        </div>
+        <div class="field">
+          <label class="field__label" for="ext-subscriber">Subscriber name</label>
+          <input id="ext-subscriber" type="text" placeholder="Juan Dela Cruz" maxlength="80" />
+        </div>
+        <div class="field">
+          <label class="field__label" for="ext-ip">Tapo P100 static IP</label>
+          <input id="ext-ip" type="text" inputmode="decimal" placeholder="192.168.1.50" required />
+          <small class="field__hint">Assign a static DHCP lease on your router so this IP never changes.</small>
+        </div>
+
+        <p id="ext-error" class="form-error hidden"></p>
+
+        <div class="modal__actions">
+          <button class="btn btn--ghost" type="button" data-close="extender-modal">Cancel</button>
+          <button class="btn btn--primary" type="submit" id="extender-submit">Save extender</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ Renewal history drawer ============ -->
+  <div class="drawer" id="history-drawer" aria-hidden="true">
+    <div class="drawer__scrim" data-close="history-drawer"></div>
+    <aside class="drawer__panel" role="dialog" aria-modal="true" aria-labelledby="history-title">
+      <div class="drawer__head">
+        <div>
+          <h2 id="history-title">Renewal history</h2>
+          <p>Latest 100 renewals</p>
+        </div>
+        <button class="icon-btn" type="button" data-close="history-drawer" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+      <div class="drawer__body">
+        <div id="history-loading" class="list-skeleton"></div>
+        <ul id="history-list" class="history-list hidden"></ul>
+        <p id="history-empty" class="empty empty--sm hidden">
+          <span class="empty__icon"><svg class="icon"><use href="#i-history" /></svg></span>
+          No renewals logged yet.
+        </p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ Settings modal ============ -->
+  <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-hidden="true">
+    <div class="modal__card">
+      <div class="modal__head">
+        <div>
+          <h2 id="settings-title" class="modal__title">Google Sheets API</h2>
+          <p class="modal__sub">Apps Script Web App URL · stored on this device</p>
+        </div>
+        <button class="icon-btn" type="button" data-close="settings-modal" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+
+      <form id="settings-form" class="modal__body" novalidate>
+        <div class="field">
+          <label class="field__label" for="cfg-url">Web App URL</label>
+          <input id="cfg-url" type="url" placeholder="https://script.google.com/macros/s/AKfy.../exec" autocomplete="off" spellcheck="false" />
+          <small class="field__hint">Deploy <code>apps-script/Code.gs</code> as a Web app (Execute as: Me, Who has access: Anyone), then paste the <code>/exec</code> URL.</small>
+        </div>
+
+        <p class="settings-note">
+          <svg class="icon"><use href="#i-shield" /></svg>
+          <span>The spreadsheet stays private. Only this Apps Script reads and writes it using the credentials on the <code>user</code> tab.</span>
+        </p>
+
+        <p id="settings-error" class="form-error hidden"></p>
+
+        <div class="modal__actions">
+          <button class="btn btn--ghost" type="button" data-close="settings-modal">Cancel</button>
+          <button class="btn btn--primary" type="submit">Save &amp; reload</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ Toasts ============ -->
+  <div id="toast-host" class="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+  <noscript>
+    <p style="padding:24px;text-align:center;color:#e2e8f0">This app needs JavaScript enabled.</p>
+  </noscript>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

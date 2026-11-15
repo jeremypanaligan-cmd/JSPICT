@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="JSP Extender Control">
+  <rect width="64" height="64" rx="16" fill="#0f172a"/>
+  <rect x="4" y="4" width="56" height="56" rx="13" fill="#10b981"/>
+  <g fill="none" stroke="#052e22" stroke-width="5.2" stroke-linecap="round">
+    <path d="M13 26a27 27 0 0 1 38 0"/>
+    <path d="M20 34.5a17 17 0 0 1 24 0"/>
+    <path d="M27 43a7 7 0 0 1 10 0"/>
+  </g>
+  <circle cx="32" cy="51" r="3.6" fill="#052e22"/>
+</svg>
