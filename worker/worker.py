@@ -157,7 +157,8 @@ class PlugPool:
         self._devices.pop(ip, None)
 
     async def read_power(self, ip: str) -> bool:
-        info = await self._device(ip).get_device_info()
+        device = await self._device(ip)
+        info = await device.get_device_info()
         return is_on(info)
 
     async def write_power(self, ip: str, on: bool) -> None:
