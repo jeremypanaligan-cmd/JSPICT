@@ -8,4 +8,4 @@
  * Nothing secret belongs here: the sheet itself stays private and only the
  * Apps Script (running as the owner) can read or write it.
  */
-export const SHEETS_API_URL = "https://script.google.com/macros/s/PASTE_DEPLOYMENT_ID/exec";
+export const SHEETS_API_URL = "https://script.google.com/macros/s/AKfycbx111cDfv308Xs4B2DlULw5rhk9tH2syWLM3Imkr08uFU9wMAVkO5eP8XUHGy6Pd1BCyA/exec";
