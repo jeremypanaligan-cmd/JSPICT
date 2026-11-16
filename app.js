@@ -10,7 +10,12 @@ const TOKEN_KEY = 'jsp-extender.token';
 const USER_KEY = 'jsp-extender.user';
 const TIMEZONE = 'Asia/Manila';
 const DAY_MS = 24 * 60 * 60 * 1000;
-const RENEWAL_DAYS = 30;
+const RENEWAL_PLANS = [
+  { days: 7, amount: 250 },
+  { days: 15, amount: 470 },
+  { days: 30, amount: 900 }
+];
+const DEFAULT_RENEWAL_DAYS = 30;
 const HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const POLL_MS = 20000;
 
@@ -113,6 +118,9 @@ const renewDevice = $('#renew-device');
 const renewCurrent = $('#renew-current');
 const renewExtend = $('#renew-mode-extend');
 const renewExtendHint = $('#renew-extend-hint');
+const renewResetHint = $('#renew-reset-hint');
+const renewPlans = $('#renew-plans');
+const renewLength = $('#renew-length');
 const renewAmount = $('#renew-amount');
 const renewPreview = $('#renew-preview');
 const renewError = $('#renew-error');
@@ -459,7 +467,7 @@ function cardMarkup(row) {
     <div class="card__actions">
       <button class="btn btn--primary" type="button" data-action="renew">
         <svg class="icon"><use href="#i-zap" /></svg>
-        Renew (+30 Days)
+        Renew
       </button>
       <button class="icon-btn" type="button" data-action="edit" aria-label="Edit ${escapeHtml(row.device_name || 'extender')}">
         <svg class="icon"><use href="#i-edit" /></svg>
@@ -536,6 +544,15 @@ function rowById(id) {
   return state.rows.find((row) => String(row.id) === String(id)) || null;
 }
 
+function planByDays(days) {
+  const fallback = RENEWAL_PLANS[RENEWAL_PLANS.length - 1];
+  return RENEWAL_PLANS.find((plan) => plan.days === Number(days)) || fallback;
+}
+
+function selectedPlan() {
+  return planByDays($('input[name="renew-plan"]:checked')?.value ?? DEFAULT_RENEWAL_DAYS);
+}
+
 function renewalBase(row, mode) {
   const expiry = toDate(row.expires_at);
   const active = !isExpiredAt(row);
@@ -547,8 +564,18 @@ function updateRenewPreview() {
   const row = rowById(state.renewTargetId);
   if (!row) return;
   const mode = $('input[name="renew-mode"]:checked')?.value || 'reset';
+  const plan = selectedPlan();
   const base = renewalBase(row, mode);
-  renewPreview.textContent = formatDateTime(new Date(base.getTime() + RENEWAL_DAYS * DAY_MS));
+  const active = !isExpiredAt(row);
+  const expiry = toDate(row.expires_at);
+
+  renewLength.textContent = `${plan.days} days`;
+  renewPreview.textContent = formatDateTime(new Date(base.getTime() + plan.days * DAY_MS));
+
+  renewExtendHint.textContent = active && expiry
+    ? `Adds ${plan.days} days on top of ${formatDateTime(expiry)}.`
+    : 'Not available while this subscription is expired.';
+  renewResetHint.textContent = `Starts a fresh ${plan.days}-day period from now.`;
 }
 
 function openRenewModal(row) {
@@ -557,19 +584,25 @@ function openRenewModal(row) {
 
   renewDevice.textContent = `${row.device_name || 'Extender'} · ${row.subscriber_name || 'No subscriber'}`;
   renewCurrent.textContent = formatDateTime(row.expires_at);
-  renewAmount.value = '';
   clearError(renewError);
+
+  const defaultPlan = planByDays(DEFAULT_RENEWAL_DAYS);
+  const planInput = renewPlans.querySelector(`input[name="renew-plan"][value="${defaultPlan.days}"]`);
+  if (planInput) planInput.checked = true;
+  renewAmount.value = String(defaultPlan.amount);
 
   renewExtend.disabled = !active;
   renewExtend.checked = active;
   $('#renew-mode-reset').checked = !active;
-  renewExtendHint.textContent = active && row.expires_at
-    ? `Adds 30 days on top of ${formatDateTime(row.expires_at)}.`
-    : 'Not available while this subscription is expired.';
 
   updateRenewPreview();
   openModal(renewModal);
 }
+
+renewPlans.addEventListener('change', () => {
+  renewAmount.value = String(selectedPlan().amount);
+  updateRenewPreview();
+});
 
 $('#renew-modes').addEventListener('change', updateRenewPreview);
 
@@ -579,6 +612,7 @@ renewForm.addEventListener('submit', async (event) => {
   if (!row) return;
 
   const mode = $('input[name="renew-mode"]:checked')?.value || 'reset';
+  const plan = selectedPlan();
   const rawAmount = renewAmount.value.trim();
   const amount = rawAmount === '' ? null : Number(rawAmount);
 
@@ -590,10 +624,10 @@ renewForm.addEventListener('submit', async (event) => {
 
   setBusy(renewSubmit, true, 'Renewing…');
   try {
-    await api('renew', { id: row.id, mode, amount });
+    await api('renew', { id: row.id, mode, days: plan.days, amount });
     closeModal(renewModal);
     await loadSubscriptions({ silent: true });
-    toast(`${row.device_name || 'Extender'} renewed for 30 days — plug power ON requested.`, 'success');
+    toast(`${row.device_name || 'Extender'} renewed for ${plan.days} days — plug power ON requested.`, 'success');
   } catch (error) {
     if (handleAuthError(error)) return;
     showError(renewError, error.message || 'Renewal failed.');

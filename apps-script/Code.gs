@@ -35,7 +35,8 @@ const TABS = {
 
 const TIMEZONE = 'Asia/Manila';
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
-const RENEWAL_DAYS = 30;
+const RENEWAL_PLANS = { 7: 250, 15: 470, 30: 900 };
+const DEFAULT_RENEWAL_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /* ------------------------------- entry points ------------------------------- */
@@ -371,6 +372,13 @@ function renew(body) {
   const target = findSubscription(body.id);
   const mode = String(body.mode || '') === 'extend' ? 'extend' : 'reset';
 
+  const hasDays = body.days !== null && body.days !== undefined && body.days !== '';
+  const requestedDays = hasDays ? Number(body.days) : DEFAULT_RENEWAL_DAYS;
+  if (hasDays && !RENEWAL_PLANS[requestedDays]) {
+    fail('Renewal length must be 7, 15 or 30 days.', 'ERROR');
+  }
+  const days = hasDays ? requestedDays : DEFAULT_RENEWAL_DAYS;
+
   const rawAmount = body.amount;
   const amount = rawAmount === null || rawAmount === undefined || rawAmount === '' ? '' : Number(rawAmount);
   if (amount !== '' && (isNaN(amount) || amount < 0)) {
@@ -382,7 +390,7 @@ function renew(body) {
   const base = mode === 'extend' && currentExpiry && currentExpiry.getTime() > now.getTime()
     ? currentExpiry
     : now;
-  const newExpiry = new Date(base.getTime() + RENEWAL_DAYS * DAY_MS);
+  const newExpiry = new Date(base.getTime() + days * DAY_MS);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);

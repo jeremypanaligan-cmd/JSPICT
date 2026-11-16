@@ -159,9 +159,34 @@
           </div>
           <div class="field">
             <span class="field__label">Renewal length</span>
-            <span class="field__value">30 days</span>
+            <span id="renew-length" class="field__value">30 days</span>
           </div>
         </div>
+
+        <fieldset class="radio-group" id="renew-plans">
+          <legend class="field__label">Renewal plan</legend>
+          <label class="radio">
+            <input type="radio" name="renew-plan" value="7" />
+            <span>
+              <strong>7 days</strong>
+              <small>₱250</small>
+            </span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="renew-plan" value="15" />
+            <span>
+              <strong>15 days</strong>
+              <small>₱470</small>
+            </span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="renew-plan" value="30" checked />
+            <span>
+              <strong>30 days</strong>
+              <small>₱900</small>
+            </span>
+          </label>
+        </fieldset>
 
         <fieldset class="radio-group" id="renew-modes">
           <legend class="field__label">Renewal base</legend>
@@ -176,13 +201,13 @@
             <input type="radio" name="renew-mode" id="renew-mode-reset" value="reset" />
             <span>
               <strong>Reset from today</strong>
-              <small>Starts a fresh 30-day period from now.</small>
+              <small id="renew-reset-hint">Starts a fresh 30-day period from now.</small>
             </span>
           </label>
         </fieldset>
 
         <div class="field">
-          <label class="field__label" for="renew-amount">Amount paid (optional)</label>
+          <label class="field__label" for="renew-amount">Amount paid</label>
           <div class="input-prefix">
             <span>₱</span>
             <input id="renew-amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" />

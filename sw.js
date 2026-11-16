@@ -1,6 +1,6 @@
 /* JSP Extender Control — service worker (relative paths for GitHub Pages). */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = `jsp-extender-${CACHE_VERSION}`;
 
 /* All paths are relative so the app works under /<repo-name>/ on GitHub Pages. */
