@@ -764,13 +764,21 @@ async function loadHistory() {
         const amount = entry.amount_paid === null || entry.amount_paid === undefined
           ? '—'
           : currencyFormatter.format(Number(entry.amount_paid));
+        const days = Number(entry.days) || null;
+        const plan = RENEWAL_PLANS.find((item) => item.days === days) || null;
+        const planLabel = days
+          ? (plan ? `${plan.days} days · ₱${plan.amount}` : `${days} days`)
+          : 'Plan not recorded';
         return `
           <li class="history-item">
             <div class="history-item__top">
               <strong>${escapeHtml(entry.device_name || 'Deleted extender')}</strong>
               <span class="history-amount">${escapeHtml(amount)}</span>
             </div>
-            <div class="history-item__meta">Renewed ${escapeHtml(formatDateTime(entry.renewed_at))}</div>
+            <div class="history-item__meta">
+              <span class="history-plan">${escapeHtml(planLabel)}</span>
+              <span>Renewed ${escapeHtml(formatDateTime(entry.renewed_at))}</span>
+            </div>
             <div class="history-item__dates">
               ${escapeHtml(formatDateTime(entry.previous_expiry))} → ${escapeHtml(formatDateTime(entry.new_expiry))}
             </div>

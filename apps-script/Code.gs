@@ -21,7 +21,10 @@
  *   extender_subscriptions  id | device_name | tapo_ip | subscriber_name | status |
  *                           expires_at | last_renewed_at | desired_power_state |
  *                           actual_power_state | last_heartbeat | created_at
- *   renewal_logs            id | subscription_id | renewed_at | previous_expiry | new_expiry | amount_paid
+ *   renewal_logs            id | subscription_id | renewed_at | previous_expiry | new_expiry | amount_paid | days
+ *
+ * The `days` column is added automatically by `setup` and by the first `renew`
+ * call, so an older renewal_logs tab keeps working.
  *
  * Run `hashPassword('your-password')` in the editor to get a hash you can paste
  * into the user tab instead of a plaintext password.
@@ -91,6 +94,7 @@ function doPost(e) {
 /** Run once to generate the signing secret and print the worker key. */
 function setup() {
   authSecret();
+  ensureColumn(TABS.logs, 'days');
   const key = workerKey();
   Logger.log('Spreadsheet: ' + SpreadsheetApp.getActiveSpreadsheet().getName());
   Logger.log('WORKER_KEY (put this in worker/.env): ' + key);
@@ -262,6 +266,14 @@ function appendObject(sheetName, record) {
   }));
 }
 
+/** Add a trailing header to a tab when it is missing (older sheets). */
+function ensureColumn(sheetName, header) {
+  const sheet = sheetByName(sheetName);
+  const headers = getHeaders(sheet);
+  if (headers.indexOf(header) >= 0) return;
+  sheet.getRange(1, Math.max(1, headers.length) + 1).setValue(header);
+}
+
 function writeFields(sheet, rowIndex, headers, fields) {
   Object.keys(fields).forEach(function (key) {
     const column = headers.indexOf(key);
@@ -342,6 +354,25 @@ function listSubscriptions() {
   return readTable(TABS.subscriptions).map(normalizeSubscription);
 }
 
+/** Days bought for a log row: the stored `days` value, else the date span. */
+function renewalDays(row) {
+  const stored = Number(String(row.days === null || row.days === undefined ? '' : row.days).trim());
+  if (!isNaN(stored) && stored > 0) return stored;
+
+  const newExpiry = parseDate(row.new_expiry);
+  const renewed = parseDate(row.renewed_at);
+  const previous = parseDate(row.previous_expiry);
+  if (!newExpiry) return null;
+
+  /* Extend mode counts from the old expiry, reset mode from the renewal time. */
+  let base = renewed || previous;
+  if (previous && (!base || previous.getTime() > base.getTime())) base = previous;
+  if (!base) return null;
+
+  const days = Math.round((newExpiry.getTime() - base.getTime()) / DAY_MS);
+  return days > 0 ? days : null;
+}
+
 function history() {
   const names = {};
   readTable(TABS.subscriptions).forEach(function (row) {
@@ -359,6 +390,7 @@ function history() {
         renewed_at: isoValue(row.renewed_at),
         previous_expiry: isoValue(row.previous_expiry),
         new_expiry: isoValue(row.new_expiry),
+        days: renewalDays(row),
         amount_paid: amount === '' || amount === null || amount === undefined ? null : Number(amount)
       };
     })
@@ -395,6 +427,7 @@ function renew(body) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
+    ensureColumn(TABS.logs, 'days');
     const sheet = sheetByName(TABS.subscriptions);
     const headers = getHeaders(sheet);
     writeFields(sheet, target.__row, headers, {
@@ -410,7 +443,8 @@ function renew(body) {
       renewed_at: isoNow(now),
       previous_expiry: currentExpiry ? isoNow(currentExpiry) : '',
       new_expiry: isoNow(newExpiry),
-      amount_paid: amount
+      amount_paid: amount,
+      days: days
     });
   } finally {
     lock.releaseLock();
