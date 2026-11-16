@@ -19,6 +19,9 @@ const DEFAULT_RENEWAL_DAYS = 30;
 const HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const POLL_MS = 20000;
 
+/* Must match BACKEND_VERSION in apps-script/Code.gs — bump both together. */
+const EXPECTED_BACKEND_VERSION = '2026-11-16';
+
 /* ------------------------------- helpers ------------------------------- */
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -106,6 +109,7 @@ const emptyState = $('#empty-state');
 const bridgeSummary = $('#bridge-summary');
 const userEmail = $('#user-email');
 const syncState = $('#sync-state');
+const backendVersion = $('#backend-version');
 const btnRefresh = $('#btn-refresh');
 const btnAdd = $('#btn-add');
 const btnHistory = $('#btn-history');
@@ -802,6 +806,7 @@ btnHistory.addEventListener('click', () => {
 
 btnRefresh.addEventListener('click', async () => {
   btnRefresh.classList.add('is-spinning');
+  void loadBackendVersion();
   await loadSubscriptions();
   setTimeout(() => btnRefresh.classList.remove('is-spinning'), 400);
 });
@@ -850,6 +855,41 @@ async function restoreSession() {
   }
 }
 
+/* ---------------------------- backend version -------------------------- */
+
+/** Ping the Web App so a stale Apps Script deployment is obvious in the footer. */
+async function loadBackendVersion() {
+  if (!backendVersion) return;
+
+  const markStale = (text, title) => {
+    backendVersion.textContent = text;
+    backendVersion.classList.add('is-stale');
+    backendVersion.title = title;
+  };
+
+  if (!state.config?.configured) {
+    markStale('Backend v?', 'The Apps Script API URL is not configured yet.');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${state.config.url}?action=ping`, { redirect: 'follow' });
+    const data = await response.json();
+    const version = String(data.version || '');
+    if (!version) {
+      markStale('Backend v?', 'The deployed Apps Script does not report a version — redeploy it.');
+      return;
+    }
+    backendVersion.textContent = `Backend v${version}`;
+    backendVersion.classList.toggle('is-stale', version !== EXPECTED_BACKEND_VERSION);
+    backendVersion.title = version === EXPECTED_BACKEND_VERSION
+      ? 'Apps Script backend is up to date.'
+      : `Deployed backend is ${version}; this app expects ${EXPECTED_BACKEND_VERSION}. Redeploy the Apps Script as a new version.`;
+  } catch {
+    markStale('Backend v?', 'Could not read the backend version from the Apps Script Web App.');
+  }
+}
+
 async function boot() {
   registerServiceWorker();
   state.config = loadConfig();
@@ -862,6 +902,7 @@ async function boot() {
     return;
   }
 
+  void loadBackendVersion();
   await restoreSession();
 }
 

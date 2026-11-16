@@ -36,6 +36,13 @@ const TABS = {
   logs: 'renewal_logs'
 };
 
+/**
+ * Bump this whenever this file changes, then redeploy a new version. The PWA
+ * footer and the bridge worker log compare against it, so a stale deployment
+ * shows up immediately instead of looking like a bug.
+ */
+const BACKEND_VERSION = '2026-11-16';
+
 const TIMEZONE = 'Asia/Manila';
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 const RENEWAL_PLANS = { 7: 250, 15: 470, 30: 900 };
@@ -47,7 +54,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'ping';
   if (action === 'ping') {
-    return sendJson({ ok: true, service: 'jsp-extender', time: isoNow() });
+    return sendJson({
+      ok: true,
+      service: 'jsp-extender',
+      version: BACKEND_VERSION,
+      time: isoNow()
+    });
   }
   return sendJson({ ok: false, error: 'This API accepts POST requests.', code: 'ERROR' });
 }

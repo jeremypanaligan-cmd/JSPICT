@@ -724,6 +724,8 @@ input:focus {
   flex-wrap: wrap;
 }
 
+.app-foot .is-stale { color: #fbbf24; font-weight: 600; }
+
 .app-foot__dot {
   width: 3px;
   height: 3px;

@@ -50,6 +50,9 @@ log = logging.getLogger("bridge")
 REQUESTS_HEADERS = {"Content-Type": "text/plain;charset=utf-8"}
 STATE_SETTLE_SECONDS = 1.0
 
+# Keep in sync with BACKEND_VERSION in apps-script/Code.gs.
+EXPECTED_BACKEND_VERSION = "2026-11-16"
+
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -115,6 +118,23 @@ def build_api_client(email: str, password: str) -> ApiClient:
 # --------------------------------------------------------------------------
 # Apps Script API (blocking HTTP pushed off the event loop)
 # --------------------------------------------------------------------------
+async def fetch_backend_version(api_url: str) -> str:
+    """Read the deployed Apps Script version from its ping response."""
+
+    def _get() -> str:
+        response = requests.get(
+            api_url,
+            params={"action": "ping"},
+            headers=REQUESTS_HEADERS,
+            timeout=20,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        return str(response.json().get("version") or "unknown")
+
+    return await asyncio.to_thread(_get)
+
+
 async def call_api(api_url: str, worker_key: str, action: str, **payload: Any) -> dict[str, Any]:
     body = json.dumps({"action": action, "workerKey": worker_key, **payload})
 
@@ -262,6 +282,19 @@ async def main() -> None:
     poll_interval = max(5, int(os.getenv("POLL_INTERVAL_SECONDS", "20")))
 
     log.info("Bridge worker started (poll interval: %ss)", poll_interval)
+
+    try:
+        version = await fetch_backend_version(api_url)
+        log.info("Apps Script backend version: %s", version)
+        if version != EXPECTED_BACKEND_VERSION:
+            log.warning(
+                "Backend reports %s but this worker expects %s — redeploy the Apps Script "
+                "(Deploy → Manage deployments → Edit → New version).",
+                version,
+                EXPECTED_BACKEND_VERSION,
+            )
+    except Exception:  # noqa: BLE001 - a failed ping must not stop the bridge
+        log.warning("Could not read the Apps Script backend version; continuing without it.")
 
     try:
         while True:
