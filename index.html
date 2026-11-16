@@ -118,6 +118,17 @@
     </header>
 
     <main>
+      <section id="bridge-alert" class="bridge-alert hidden" role="status" aria-live="polite">
+        <div class="bridge-alert__text">
+          <strong id="bridge-alert-title">Bridge offline</strong>
+          <p id="bridge-alert-body">—</p>
+        </div>
+        <div class="bridge-alert__actions">
+          <button id="bridge-start" class="btn btn--primary btn--sm hidden" type="button">Start bridge</button>
+          <button id="bridge-recheck" class="btn btn--ghost btn--sm" type="button">Check again</button>
+        </div>
+      </section>
+
       <div id="cards" class="cards"></div>
 
       <div id="empty-state" class="empty hidden">
@@ -311,6 +322,12 @@
           <label class="field__label" for="cfg-url">Web App URL</label>
           <input id="cfg-url" type="url" placeholder="https://script.google.com/macros/s/AKfy.../exec" autocomplete="off" spellcheck="false" />
           <small class="field__hint">Deploy <code>apps-script/Code.gs</code> as a Web app (Execute as: Me, Who has access: Anyone), then paste the <code>/exec</code> URL.</small>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="cfg-agent">Bridge agent URL</label>
+          <input id="cfg-agent" type="url" placeholder="http://127.0.0.1:8765" autocomplete="off" spellcheck="false" />
+          <small class="field__hint">Run <code>worker\start-agent.bat</code> on the PC with the Tapo plugs, then this device gets a <strong>Start bridge</strong> button whenever the bridge goes offline.</small>
         </div>
 
         <p class="settings-note">

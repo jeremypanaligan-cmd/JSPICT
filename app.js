@@ -21,6 +21,8 @@ const POLL_MS = 20000;
 
 /* Must match BACKEND_VERSION in apps-script/Code.gs — bump both together. */
 const EXPECTED_BACKEND_VERSION = '2026-11-16';
+/* Loopback helper (worker/bridge_agent.py) that can start the bridge worker. */
+const DEFAULT_AGENT_URL = 'http://127.0.0.1:8765';
 
 /* ------------------------------- helpers ------------------------------- */
 
@@ -90,7 +92,8 @@ const state = {
   editTargetId: null,
   refreshTimer: null,
   tickTimer: null,
-  pollTimer: null
+  pollTimer: null,
+  agent: { ok: false, running: false, checkedAt: 0, action: null }
 };
 
 /* --------------------------------- DOM --------------------------------- */
@@ -110,6 +113,11 @@ const bridgeSummary = $('#bridge-summary');
 const userEmail = $('#user-email');
 const syncState = $('#sync-state');
 const backendVersion = $('#backend-version');
+const bridgeAlertEl = $('#bridge-alert');
+const bridgeAlertTitle = $('#bridge-alert-title');
+const bridgeAlertBody = $('#bridge-alert-body');
+const bridgeStartBtn = $('#bridge-start');
+const bridgeRecheckBtn = $('#bridge-recheck');
 const btnRefresh = $('#btn-refresh');
 const btnAdd = $('#btn-add');
 const btnHistory = $('#btn-history');
@@ -147,6 +155,7 @@ const historyLoading = $('#history-loading');
 const settingsModal = $('#settings-modal');
 const settingsForm = $('#settings-form');
 const cfgUrl = $('#cfg-url');
+const cfgAgent = $('#cfg-agent');
 const settingsError = $('#settings-error');
 
 const toastHost = $('#toast-host');
@@ -225,12 +234,14 @@ function loadConfig() {
   const url = String(saved.url || DEFAULT_API_URL || '').trim();
   return {
     url,
+    agentUrl: String(saved.agentUrl || DEFAULT_AGENT_URL).trim().replace(/\/+$/, ''),
     configured: /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/i.test(url)
   };
 }
 
 function openSettings() {
   cfgUrl.value = state.config?.configured ? state.config.url : '';
+  cfgAgent.value = state.config?.agentUrl || DEFAULT_AGENT_URL;
   clearError(settingsError);
   openModal(settingsModal);
 }
@@ -244,8 +255,14 @@ settingsForm.addEventListener('submit', (event) => {
     return;
   }
 
-  localStorage.setItem(CONFIG_KEY, JSON.stringify({ url }));
-  toast('API URL saved. Reloading…', 'success');
+  const agentUrl = cfgAgent.value.trim().replace(/\/+$/, '');
+  if (agentUrl && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/i.test(agentUrl)) {
+    showError(settingsError, 'The bridge agent URL must be a loopback address, e.g. http://127.0.0.1:8765');
+    return;
+  }
+
+  localStorage.setItem(CONFIG_KEY, JSON.stringify({ url, agentUrl: agentUrl || DEFAULT_AGENT_URL }));
+  toast('Settings saved. Reloading…', 'success');
   setTimeout(() => window.location.reload(), 700);
 });
 
@@ -384,6 +401,7 @@ async function loadSubscriptions({ silent = false } = {}) {
     const data = await api('list');
     state.rows = data.rows || [];
     renderCards();
+    void refreshBridgeHealth();
     syncState.textContent = `Synced ${new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}`;
   } catch (error) {
     if (handleAuthError(error)) return;
@@ -800,6 +818,141 @@ async function loadHistory() {
 btnHistory.addEventListener('click', () => {
   openModal(historyDrawer);
   void loadHistory();
+});
+
+/* ------------------------------ bridge agent --------------------------- */
+
+function agentBase() {
+  return String(state.config?.agentUrl || DEFAULT_AGENT_URL).replace(/\/+$/, '');
+}
+
+async function agentRequest(path, method = 'GET') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await fetch(`${agentBase()}${path}`, { method, cache: 'no-store', signal: controller.signal });
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || `The bridge agent returned HTTP ${response.status}.`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function lastHeartbeatAt() {
+  const times = state.rows
+    .map((row) => toDate(row.last_heartbeat))
+    .filter(Boolean)
+    .map((date) => date.getTime());
+  return times.length ? new Date(Math.max(...times)) : null;
+}
+
+function relativeAge(date) {
+  if (!date) return 'never';
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 90) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function pendingPlugCommands() {
+  return state.rows.filter((row) => Boolean(row.desired_power_state) !== Boolean(row.actual_power_state));
+}
+
+/** Banner that explains a dead bridge and offers a one-tap start via the local agent. */
+async function refreshBridgeHealth() {
+  if (!bridgeAlertEl) return;
+
+  const heartbeat = lastHeartbeatAt();
+  const online = Boolean(heartbeat) && Date.now() - heartbeat.getTime() <= HEARTBEAT_WINDOW_MS;
+
+  if (!state.rows.length || online) {
+    bridgeAlertEl.classList.add('hidden');
+    return;
+  }
+
+  if (Date.now() - state.agent.checkedAt > 10000) {
+    state.agent.checkedAt = Date.now();
+    try {
+      const data = await agentRequest('/status');
+      state.agent.ok = true;
+      state.agent.running = Boolean(data.running);
+    } catch {
+      state.agent.ok = false;
+      state.agent.running = false;
+    }
+  }
+
+  const pending = pendingPlugCommands();
+  const wantsOn = pending.filter((row) => row.desired_power_state).length;
+  const notes = [`Last heartbeat ${relativeAge(heartbeat)}.`];
+
+  if (pending.length) {
+    notes.push(
+      `${pending.length} plug command${pending.length === 1 ? '' : 's'} queued — ` +
+        `${wantsOn ? 'plug ON' : 'plug OFF'} requested but the plug has not switched yet.`
+    );
+  } else {
+    notes.push('Renewals are saved, but plugs cannot switch ON or be cut off until the bridge is back.');
+  }
+
+  if (!state.agent.ok) {
+    state.agent.action = null;
+    notes.push(`No local agent at ${agentBase()} — run worker\\start-agent.bat on the plug PC.`);
+  } else if (state.agent.running) {
+    state.agent.action = 'restart';
+    notes.push('The worker is running but not reporting — restart it, or check worker\\worker.log.');
+  } else {
+    state.agent.action = 'start';
+    notes.push('The agent is ready — start the bridge to apply the queued commands.');
+  }
+
+  bridgeAlertTitle.textContent = 'Bridge offline — plug control paused';
+  bridgeAlertBody.textContent = notes.join(' ');
+  bridgeStartBtn.textContent = state.agent.action === 'restart' ? 'Restart bridge' : 'Start bridge';
+  bridgeStartBtn.classList.toggle('hidden', !state.agent.action);
+  bridgeAlertEl.classList.remove('hidden');
+}
+
+bridgeStartBtn.addEventListener('click', async () => {
+  const action = state.agent.action;
+  if (!action) return;
+
+  const label = bridgeStartBtn.textContent;
+  bridgeStartBtn.disabled = true;
+  bridgeStartBtn.textContent = action === 'restart' ? 'Restarting…' : 'Starting…';
+
+  try {
+    const data = await agentRequest(`/${action}`, 'POST');
+    toast(data.running ? 'Bridge started — waiting for its first heartbeat…' : 'Bridge command sent.', 'success');
+    state.agent.ok = true;
+    state.agent.running = Boolean(data.running);
+    state.agent.checkedAt = Date.now();
+    setTimeout(() => void loadSubscriptions({ silent: true }), 8000);
+  } catch (error) {
+    state.agent.ok = false;
+    state.agent.checkedAt = 0;
+    toast(`Could not start the bridge: ${error.message}`, 'error');
+    void refreshBridgeHealth();
+  } finally {
+    bridgeStartBtn.disabled = false;
+    bridgeStartBtn.textContent = label;
+  }
+});
+
+bridgeRecheckBtn.addEventListener('click', () => {
+  state.agent.checkedAt = 0;
+  void loadSubscriptions({ silent: true });
 });
 
 /* ------------------------------- refresh ------------------------------- */

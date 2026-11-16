@@ -8,6 +8,8 @@ __pycache__/
 worker/.venv/
 .venv/
 worker/worker.log
+worker/agent.log
+worker/.worker.pid
 
 # OS / editor
 .DS_Store
