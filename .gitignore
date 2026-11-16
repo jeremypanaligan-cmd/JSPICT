@@ -9,6 +9,8 @@ worker/.venv/
 .venv/
 worker/worker.log
 worker/agent.log
+worker/watchdog.log
+worker/watchdog.log.old
 worker/.worker.pid
 
 # OS / editor
