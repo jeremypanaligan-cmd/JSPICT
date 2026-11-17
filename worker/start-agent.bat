@@ -1,10 +1,6 @@
 @echo off
-rem JSP Extender Control - start the local bridge agent (lets the app start the bridge).
-rem Optional: copy this file into shell:startup so the agent is always available.
+rem JSP Extender Control - start the local bridge agent (no window).
+rem This delegates to start-agent-hidden.vbs so nothing flashes on screen.
+rem You can also double-click start-agent-hidden.vbs directly.
 cd /d "%~dp0"
-
-if exist ".venv\Scripts\pythonw.exe" (
-  start "" ".venv\Scripts\pythonw.exe" bridge_agent.py
-) else (
-  start "" pythonw bridge_agent.py
-)
+wscript.exe "%~dp0start-agent-hidden.vbs"

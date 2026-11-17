@@ -13,11 +13,11 @@
 $ErrorActionPreference = 'Stop'
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$bat = Join-Path $here 'start-agent.bat'
+$launcher = Join-Path $here 'start-agent-hidden.vbs'
 $watchdog = Join-Path $here 'watchdog.ps1'
 $taskName = 'JSP-Bridge-Watchdog'
 
-foreach ($required in @($bat, $watchdog, (Join-Path $here 'bridge_agent.py'))) {
+foreach ($required in @($launcher, $watchdog, (Join-Path $here 'bridge_agent.py'))) {
     if (-not (Test-Path $required)) {
         throw "Missing file: $required (run this script from the worker folder)"
     }
@@ -29,9 +29,10 @@ $shortcutPath = Join-Path $startup 'JSP Bridge Agent.lnk'
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $bat
+$shortcut.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
+$shortcut.Arguments = '"' + $launcher + '"'
 $shortcut.WorkingDirectory = $here
-$shortcut.WindowStyle = 7          # minimized
+$shortcut.WindowStyle = 7          # wscript has no window anyway
 $shortcut.Description = 'Start the JSP Extender bridge agent at logon'
 $shortcut.Save()
 Write-Host "Startup shortcut : $shortcutPath"
