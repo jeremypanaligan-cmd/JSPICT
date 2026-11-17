@@ -44,7 +44,9 @@ const TABS = {
   users: 'user',
   subscriptions: 'extender_subscriptions',
   logs: 'renewal_logs',
-  overrides: 'override_logs'
+  overrides: 'override_logs',
+  events: 'power_events',
+  bridge: 'bridge_status'
 };
 
 const MONITOR_MINUTES = 5;
@@ -56,7 +58,7 @@ const ALERT_REPEAT_MS = 6 * 60 * 60 * 1000;
  * footer and the bridge worker log compare against it, so a stale deployment
  * shows up immediately instead of looking like a bug.
  */
-const BACKEND_VERSION = '2026-11-17';
+const BACKEND_VERSION = '2026-11-18';
 
 const TIMEZONE = 'Asia/Manila';
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
@@ -88,7 +90,9 @@ function doPost(e) {
 
     if (action === 'workerPoll' || action === 'workerApply') {
       requireWorkerKey(body.workerKey);
-      return sendJson(action === 'workerPoll' ? workerPoll() : workerApply(body.updates));
+      return sendJson(
+        action === 'workerPoll' ? workerPoll() : workerApply(body.updates, body.bridge, body.events)
+      );
     }
 
     const session = requireToken(body.token);
@@ -106,6 +110,8 @@ function doPost(e) {
         return sendJson(setPower(body, session));
       case 'overrides':
         return sendJson({ ok: true, rows: overrideLogs() });
+      case 'events':
+        return sendJson({ ok: true, rows: eventLogs() });
       case 'monitorNow':
         return sendJson({ ok: true, result: monitor() });
       case 'saveSubscription':
@@ -125,8 +131,11 @@ function doPost(e) {
 /** Run once to generate the signing secret and print the worker key. */
 function setup() {
   authSecret();
-  ensureColumn(TABS.logs, 'days');
+  LOG_EXTRA_COLUMNS.forEach(function (column) { ensureColumn(TABS.logs, column); });
+  SUBSCRIPTION_EXTRA_COLUMNS.forEach(function (column) { ensureColumn(TABS.subscriptions, column); });
   ensureTab(TABS.overrides, OVERRIDE_HEADERS);
+  ensureTab(TABS.events, EVENT_HEADERS);
+  ensureTab(TABS.bridge, BRIDGE_HEADERS);
   const key = workerKey();
   Logger.log('Spreadsheet: ' + SpreadsheetApp.getActiveSpreadsheet().getName());
   Logger.log('WORKER_KEY (put this in worker/.env): ' + key);
@@ -300,6 +309,10 @@ function appendObject(sheetName, record) {
 }
 
 const OVERRIDE_HEADERS = ['id', 'subscription_id', 'at', 'source', 'from_state', 'to_state', 'actor'];
+const EVENT_HEADERS = ['id', 'subscription_id', 'at', 'action', 'reason', 'actor', 'source'];
+const BRIDGE_HEADERS = ['id', 'last_heartbeat', 'updated_at', 'notes'];
+const SUBSCRIPTION_EXTRA_COLUMNS = ['extender_ip', 'plug_reachable', 'extender_reachable', 'last_error'];
+const LOG_EXTRA_COLUMNS = ['days', 'method', 'reference', 'received_by'];
 
 /** Create a tab (with headers) when it does not exist yet. */
 function ensureTab(name, headers) {
@@ -391,17 +404,32 @@ function toBool(value) {
   return text === 'TRUE' || text === '1' || text === 'YES' || text === 'ON';
 }
 
+/** true/false when the worker has reported, null when never reported. */
+function optionalBool(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  return toBool(value);
+}
+
+/** True when a cell holds anything - note that a real boolean false is a value. */
+function hasValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
 function normalizeSubscription(row) {
   return {
     id: String(row.id || '').trim(),
     device_name: String(row.device_name || '').trim(),
     tapo_ip: String(row.tapo_ip || '').trim(),
+    extender_ip: String(row.extender_ip || '').trim(),
     subscriber_name: row.subscriber_name ? String(row.subscriber_name).trim() : '',
     status: String(row.status || '').trim().toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'EXPIRED',
     expires_at: isoValue(row.expires_at),
     last_renewed_at: isoValue(row.last_renewed_at),
     desired_power_state: toBool(row.desired_power_state),
     actual_power_state: toBool(row.actual_power_state),
+    plug_reachable: optionalBool(row.plug_reachable),
+    extender_reachable: optionalBool(row.extender_reachable),
+    last_error: String(row.last_error || '').trim(),
     last_heartbeat: isoValue(row.last_heartbeat),
     created_at: isoValue(row.created_at)
   };
@@ -471,7 +499,10 @@ function history() {
         previous_expiry: isoValue(row.previous_expiry),
         new_expiry: isoValue(row.new_expiry),
         days: renewalDays(row),
-        amount_paid: amount === '' || amount === null || amount === undefined ? null : Number(amount)
+        amount_paid: amount === '' || amount === null || amount === undefined ? null : Number(amount),
+        method: String(row.method || '').trim(),
+        reference: String(row.reference || '').trim(),
+        received_by: String(row.received_by || '').trim()
       };
     })
     .sort(function (a, b) {
@@ -497,6 +528,10 @@ function renew(body) {
     fail('Amount paid must be a positive number.', 'ERROR');
   }
 
+  const method = String(body.method || '').trim().slice(0, 40);
+  const reference = String(body.reference || '').trim().slice(0, 60);
+  const receivedBy = String(body.received_by || '').trim().slice(0, 60);
+
   const now = new Date();
   const currentExpiry = parseDate(target.expires_at);
   const base = mode === 'extend' && currentExpiry && currentExpiry.getTime() > now.getTime()
@@ -508,6 +543,7 @@ function renew(body) {
   lock.waitLock(15000);
   try {
     ensureColumn(TABS.logs, 'days');
+    LOG_EXTRA_COLUMNS.forEach(function (column) { ensureColumn(TABS.logs, column); });
     const sheet = sheetByName(TABS.subscriptions);
     const headers = getHeaders(sheet);
     writeFields(sheet, target.__row, headers, {
@@ -524,7 +560,10 @@ function renew(body) {
       previous_expiry: currentExpiry ? isoNow(currentExpiry) : '',
       new_expiry: isoNow(newExpiry),
       amount_paid: amount,
-      days: days
+      days: days,
+      method: method,
+      reference: reference,
+      received_by: receivedBy
     });
   } finally {
     lock.releaseLock();
@@ -574,8 +613,12 @@ function saveSubscription(body) {
   const deviceName = String(body.device_name || '').trim();
   const subscriberName = String(body.subscriber_name || '').trim();
   const tapoIp = String(body.tapo_ip || '').trim();
+  const extenderIp = String(body.extender_ip || '').trim();
 
   if (!deviceName) fail('Device name is required.', 'ERROR');
+  if (extenderIp && !/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(extenderIp)) {
+    fail('Enter a valid extender IP, e.g. 192.168.100.10', 'ERROR');
+  }
   if (!/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(tapoIp)) {
     fail('Enter a valid IPv4 address, e.g. 192.168.1.50', 'ERROR');
   }
@@ -586,6 +629,7 @@ function saveSubscription(body) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
+    ensureColumn(TABS.subscriptions, 'extender_ip');
     if (id) {
       const target = findSubscription(id);
       const sheet = sheetByName(TABS.subscriptions);
@@ -593,7 +637,8 @@ function saveSubscription(body) {
       writeFields(sheet, target.__row, headers, {
         device_name: deviceName,
         subscriber_name: subscriberName,
-        tapo_ip: tapoIp
+        tapo_ip: tapoIp,
+        extender_ip: extenderIp
       });
       return { ok: true, id: id };
     }
@@ -603,6 +648,7 @@ function saveSubscription(body) {
       id: newId,
       device_name: deviceName,
       tapo_ip: tapoIp,
+      extender_ip: extenderIp,
       subscriber_name: subscriberName,
       status: 'EXPIRED',
       expires_at: isoNow(new Date()),
@@ -624,9 +670,8 @@ function workerPoll() {
   return { ok: true, serverTime: isoNow(), rows: listSubscriptions() };
 }
 
-function workerApply(updates) {
-  if (!updates || !updates.length) return { ok: true, updated: 0 };
-
+function workerApply(updates, bridge, events) {
+  SUBSCRIPTION_EXTRA_COLUMNS.forEach(function (column) { ensureColumn(TABS.subscriptions, column); });
   const sheet = sheetByName(TABS.subscriptions);
   const headers = getHeaders(sheet);
   const rows = readTable(TABS.subscriptions);
@@ -636,7 +681,7 @@ function workerApply(updates) {
   let updated = 0;
 
   try {
-    updates.forEach(function (entry) {
+    (updates || []).forEach(function (entry) {
       const target = rows.find(function (row) {
         return String(row.id || '').trim() === String(entry.id || '').trim();
       });
@@ -657,17 +702,83 @@ function workerApply(updates) {
       if (incoming.last_heartbeat) {
         fields.last_heartbeat = isoValue(incoming.last_heartbeat);
       }
+      if (incoming.plug_reachable !== undefined) {
+        fields.plug_reachable = toBool(incoming.plug_reachable);
+      }
+      if (incoming.extender_reachable !== undefined) {
+        fields.extender_reachable = toBool(incoming.extender_reachable);
+      }
+      if (incoming.last_error !== undefined) {
+        fields.last_error = String(incoming.last_error).slice(0, 200);
+      }
 
       if (Object.keys(fields).length) {
         writeFields(sheet, target.__row, headers, fields);
         updated += 1;
       }
     });
+
+    if (events && events.length) appendEvents(events);
+    if (bridge && bridge.last_heartbeat) writeBridgeStatus(bridge);
   } finally {
     lock.releaseLock();
   }
 
-  return { ok: true, updated: updated };
+  return { ok: true, updated: updated, events: events ? events.length : 0 };
+}
+
+/** Physical ON/OFF history written by the bridge (dispute evidence). */
+function appendEvents(events) {
+  ensureTab(TABS.events, EVENT_HEADERS);
+  events.slice(0, 50).forEach(function (event) {
+    appendObject(TABS.events, {
+      id: 'EVT-' + Utilities.getUuid().slice(0, 8).toUpperCase(),
+      subscription_id: String(event.subscription_id || '').trim(),
+      at: isoValue(event.at) || isoNow(),
+      action: String(event.action || '').trim().toUpperCase() === 'ON' ? 'ON' : 'OFF',
+      reason: String(event.reason || '').trim().slice(0, 60),
+      actor: String(event.actor || 'bridge').trim().slice(0, 60),
+      source: 'worker'
+    });
+  });
+}
+
+function eventLogs() {
+  if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TABS.events)) return [];
+  return readTable(TABS.events)
+    .map(function (row) {
+      return {
+        id: String(row.id || '').trim(),
+        subscription_id: String(row.subscription_id || '').trim(),
+        at: isoValue(row.at),
+        action: String(row.action || '').trim().toUpperCase() === 'ON' ? 'ON' : 'OFF',
+        reason: String(row.reason || '').trim(),
+        actor: String(row.actor || '').trim(),
+        source: String(row.source || '').trim()
+      };
+    })
+    .sort(function (a, b) {
+      return String(b.at).localeCompare(String(a.at));
+    })
+    .slice(0, 200);
+}
+
+/** One singleton row that proves the bridge is alive even with no subscriptions. */
+function writeBridgeStatus(bridge) {
+  ensureTab(TABS.bridge, BRIDGE_HEADERS);
+  const sheet = sheetByName(TABS.bridge);
+  const headers = getHeaders(sheet);
+  const existing = readTable(TABS.bridge).find(function (row) {
+    return String(row.id || '').trim() === 'BRIDGE';
+  });
+  const record = {
+    id: 'BRIDGE',
+    last_heartbeat: isoValue(bridge.last_heartbeat) || isoNow(),
+    updated_at: isoNow(),
+    notes: String(bridge.notes || '').trim().slice(0, 120)
+  };
+  if (existing) writeFields(sheet, existing.__row, headers, record);
+  else appendObject(TABS.bridge, record);
 }
 
 /* -------------------------------- monitoring ------------------------------- */
@@ -692,7 +803,9 @@ function monitor() {
     return toBool(row.desired_power_state) !== toBool(row.actual_power_state);
   });
 
-  if (rows.length && !bridge.online) {
+  // Alert on a stale bridge even with zero subscriptions; stay quiet only on a
+  // brand-new install where the bridge has never reported.
+  if (!bridge.online && (bridge.lastSeen || rows.length)) {
     messages.push(
       'Bridge OFFLINE — last heartbeat ' +
         (bridge.lastSeen ? Utilities.formatDate(bridge.lastSeen, TIMEZONE, 'yyyy-MM-dd HH:mm') + ' (' + bridge.ageMinutes + ' min ago)' : 'never') +
@@ -701,12 +814,55 @@ function monitor() {
     );
   }
 
+  const unreachable = rows.filter(function (row) {
+    return hasValue(row.plug_reachable) && !toBool(row.plug_reachable);
+  });
+  if (unreachable.length) {
+    messages.push(
+      'Plug unreachable: ' +
+        unreachable
+          .map(function (row) {
+            const detail = String(row.last_error || '').trim();
+            return String(row.id || '').trim() + (detail ? ' (' + detail + ')' : '');
+          })
+          .join('; ') +
+        '.'
+    );
+  }
+
+  const tampered = rows.filter(function (row) {
+    return (
+      toBool(row.desired_power_state) &&
+      toBool(row.actual_power_state) &&
+      hasValue(row.extender_reachable) &&
+      !toBool(row.extender_reachable) &&
+      String(row.status || '').trim().toUpperCase() === 'ACTIVE'
+    );
+  });
+  if (tampered.length) {
+    messages.push(
+      'POSSIBLE TAMPERING: ' +
+        tampered
+          .map(function (row) {
+            const ip = String(row.extender_ip || '').trim() || 'the extender';
+            return String(row.id || '').trim() + ' (' + ip + ' not detected while the plug is on)';
+          })
+          .join('; ') +
+        '. It may have been moved to another outlet.'
+    );
+  }
+
   if (!messages.length) {
     clearAlertState();
     return { expired: expired, online: bridge.online, pending: pending.length, alerted: false };
   }
 
-  const signature = (bridge.online ? 'online' : 'offline') + '|' + expired.join(',');
+  const signature = [
+    bridge.online ? 'online' : 'offline',
+    expired.join(','),
+    unreachable.map(function (row) { return String(row.id || '').trim(); }).join(','),
+    tampered.map(function (row) { return String(row.id || '').trim(); }).join(',')
+  ].join('|');
   const props = scriptProps();
   const lastSignature = props.getProperty('ALERT_SIGNATURE') || '';
   const lastAt = Number(props.getProperty('ALERT_AT') || 0);
@@ -748,6 +904,16 @@ function expireOverdue(now) {
 
 function bridgeHealth(rows, nowMs) {
   let lastSeen = null;
+
+  // bridge_status is the authoritative heartbeat: it exists even when the
+  // spreadsheet has no subscriptions yet.
+  if (SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TABS.bridge)) {
+    readTable(TABS.bridge).forEach(function (row) {
+      const beat = parseDate(row.last_heartbeat);
+      if (beat && (!lastSeen || beat.getTime() > lastSeen.getTime())) lastSeen = beat;
+    });
+  }
+
   rows.forEach(function (row) {
     const beat = parseDate(row.last_heartbeat);
     if (beat && (!lastSeen || beat.getTime() > lastSeen.getTime())) lastSeen = beat;

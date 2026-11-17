@@ -234,6 +234,23 @@
           </div>
         </div>
 
+        <div class="field-row">
+          <div class="field">
+            <label class="field__label" for="renew-method">Payment method</label>
+            <input id="renew-method" type="text" list="renew-methods" placeholder="GCash" maxlength="40" />
+            <datalist id="renew-methods">
+              <option value="Cash"></option>
+              <option value="GCash"></option>
+              <option value="Maya"></option>
+              <option value="Bank transfer"></option>
+            </datalist>
+          </div>
+          <div class="field">
+            <label class="field__label" for="renew-reference">Reference no.</label>
+            <input id="renew-reference" type="text" placeholder="Optional" maxlength="60" />
+          </div>
+        </div>
+
         <div class="renew-preview">
           <span>New expiry</span>
           <strong id="renew-preview">—</strong>
@@ -275,6 +292,12 @@
           <label class="field__label" for="ext-ip">Tapo P100 static IP</label>
           <input id="ext-ip" type="text" inputmode="decimal" placeholder="192.168.1.50" required />
           <small class="field__hint">Assign a static DHCP lease on your router so this IP never changes.</small>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="ext-extender-ip">Extender LAN IP (optional)</label>
+          <input id="ext-extender-ip" type="text" inputmode="decimal" placeholder="192.168.100.10" />
+          <small class="field__hint">Enables tamper detection: you get an alert when this address stops answering while the plug is on.</small>
         </div>
 
         <p id="ext-error" class="form-error hidden"></p>

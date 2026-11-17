@@ -21,7 +21,7 @@ const HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const POLL_MS = 20000;
 
 /* Must match BACKEND_VERSION in apps-script/Code.gs — bump both together. */
-const EXPECTED_BACKEND_VERSION = '2026-11-17';
+const EXPECTED_BACKEND_VERSION = '2026-11-18';
 /* Loopback helper (worker/bridge_agent.py) that can start the bridge worker. */
 const DEFAULT_AGENT_URL = 'http://127.0.0.1:8765';
 
@@ -136,6 +136,8 @@ const renewResetHint = $('#renew-reset-hint');
 const renewPlans = $('#renew-plans');
 const renewLength = $('#renew-length');
 const renewAmount = $('#renew-amount');
+const renewMethod = $('#renew-method');
+const renewReference = $('#renew-reference');
 const renewPreview = $('#renew-preview');
 const renewError = $('#renew-error');
 const renewSubmit = $('#renew-submit');
@@ -146,6 +148,7 @@ const extenderTitle = $('#extender-title');
 const extName = $('#ext-name');
 const extSubscriber = $('#ext-subscriber');
 const extIp = $('#ext-ip');
+const extExtenderIp = $('#ext-extender-ip');
 const extError = $('#ext-error');
 const extenderSubmit = $('#extender-submit');
 
@@ -478,6 +481,12 @@ function cardMarkup(row) {
 
     <div class="card__chips">
       ${bridgeChip(row)}
+      ${row.plug_reachable === false
+        ? `<span class="chip chip--warn" title="${escapeHtml(row.last_error || 'The bridge could not reach the plug')}">Plug unreachable</span>`
+        : ''}
+      ${row.extender_reachable === false
+        ? '<span class="chip chip--warn" title="The extender was not detected on the LAN while the plug is on">Extender not detected</span>'
+        : ''}
       <span class="chip" title="Static local IP">
         <svg class="icon"><use href="#i-plug" /></svg>
         ${escapeHtml(row.tapo_ip || 'No IP')}
@@ -608,6 +617,8 @@ function openRenewModal(row) {
 
   renewDevice.textContent = `${row.device_name || 'Extender'} · ${row.subscriber_name || 'No subscriber'}`;
   renewCurrent.textContent = formatDateTime(row.expires_at);
+  renewMethod.value = '';
+  renewReference.value = '';
   clearError(renewError);
 
   const defaultPlan = planByDays(DEFAULT_RENEWAL_DAYS);
@@ -648,7 +659,14 @@ renewForm.addEventListener('submit', async (event) => {
 
   setBusy(renewSubmit, true, 'Renewing…');
   try {
-    await api('renew', { id: row.id, mode, days: plan.days, amount });
+    await api('renew', {
+      id: row.id,
+      mode,
+      days: plan.days,
+      amount,
+      method: renewMethod.value.trim(),
+      reference: renewReference.value.trim()
+    });
     closeModal(renewModal);
     await loadSubscriptions({ silent: true });
     toast(`${row.device_name || 'Extender'} renewed for ${dayLabel(plan.days)} — plug power ON requested.`, 'success');
@@ -715,6 +733,7 @@ function openExtenderModal(row = null) {
   extName.value = row?.device_name || '';
   extSubscriber.value = row?.subscriber_name || '';
   extIp.value = row?.tapo_ip || '';
+  extExtenderIp.value = row?.extender_ip || '';
   clearError(extError);
   openModal(extenderModal);
   setTimeout(() => extName.focus(), 120);
@@ -732,6 +751,7 @@ extenderForm.addEventListener('submit', async (event) => {
   const deviceName = extName.value.trim();
   const subscriberName = extSubscriber.value.trim();
   const tapoIp = extIp.value.trim();
+  const extenderIp = extExtenderIp.value.trim();
 
   if (!deviceName) {
     showError(extError, 'Device name is required.');
@@ -741,12 +761,17 @@ extenderForm.addEventListener('submit', async (event) => {
     showError(extError, 'Enter the plug\'s static IPv4 address, e.g. 192.168.1.50');
     return;
   }
+  if (extenderIp && !isValidIPv4(extenderIp)) {
+    showError(extError, 'The extender IP must be a valid IPv4 address, e.g. 192.168.100.10');
+    return;
+  }
 
   const editing = Boolean(state.editTargetId);
   const payload = {
     device_name: deviceName,
     subscriber_name: subscriberName,
-    tapo_ip: tapoIp
+    tapo_ip: tapoIp,
+    extender_ip: extenderIp
   };
   if (editing) payload.id = state.editTargetId;
 
@@ -802,6 +827,9 @@ async function loadHistory() {
             <div class="history-item__meta">
               <span class="history-plan">${escapeHtml(planLabel)}</span>
               <span>Renewed ${escapeHtml(formatDateTime(entry.renewed_at))}</span>
+              ${entry.method || entry.reference
+                ? `<span>${escapeHtml([entry.method, entry.reference].filter(Boolean).join(' \u00b7 '))}</span>`
+                : ''}
             </div>
             <div class="history-item__dates">
               ${escapeHtml(formatDateTime(entry.previous_expiry))} → ${escapeHtml(formatDateTime(entry.new_expiry))}

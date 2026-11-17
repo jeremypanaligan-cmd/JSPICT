@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,15 @@ def parse_ts(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def tcp_reachable(host: str, port: int = 80, timeout: float = 2.0) -> bool:
+    """Cheap presence check for the extender's web UI (tamper detection)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def utcnow() -> datetime:
@@ -200,6 +210,8 @@ async def process_subscription(plugs: PlugPool, row: dict[str, Any]) -> dict[str
     ip = str(row.get("tapo_ip") or "").strip()
 
     fields: dict[str, Any] = {}
+    events: list[dict[str, Any]] = []
+    expired_now = False
     status = str(row.get("status") or "").upper()
     desired = bool(row.get("desired_power_state"))
     expires_at = parse_ts(row.get("expires_at"))
@@ -215,15 +227,30 @@ async def process_subscription(plugs: PlugPool, row: dict[str, Any]) -> dict[str
         fields["status"] = "EXPIRED"
         fields["desired_power_state"] = False
         desired = False
+        expired_now = True
 
-    # 2) Keep the plug in sync with the desired state.
+    # 2) Extender presence: still plugged into our smart plug, or moved?
+    extender_ip = str(row.get("extender_ip") or "").strip()
+    if extender_ip:
+        extender_ok = await asyncio.to_thread(tcp_reachable, extender_ip)
+        fields["extender_reachable"] = extender_ok
+        if not extender_ok:
+            log.warning("%s: extender at %s is not reachable", device_name, extender_ip)
+
+    # 3) Keep the plug in sync with the desired state.
     if not ip:
         log.warning("%s has no tapo_ip configured — skipping plug control", device_name)
         fields["last_heartbeat"] = iso_now()
-        return {"id": row_id, "fields": fields}
+        return {"id": row_id, "fields": fields, "events": events}
+
+    reason = "expired" if expired_now else "command"
 
     try:
         actual = await plugs.read_power(ip)
+        fields["plug_reachable"] = True
+        fields["last_error"] = (
+            "" if fields.get("extender_reachable", True) else f"extender {extender_ip} not reachable"
+        )
 
         if actual != desired:
             log.info(
@@ -233,6 +260,15 @@ async def process_subscription(plugs: PlugPool, row: dict[str, Any]) -> dict[str
                 "ON" if desired else "OFF",
             )
             await plugs.write_power(ip, desired)
+            events.append(
+                {
+                    "subscription_id": row_id,
+                    "at": iso_now(),
+                    "action": "ON" if desired else "OFF",
+                    "reason": reason,
+                    "actor": "bridge",
+                }
+            )
             await asyncio.sleep(STATE_SETTLE_SECONDS)
             actual = await plugs.read_power(ip)
             if actual != desired:
@@ -247,11 +283,13 @@ async def process_subscription(plugs: PlugPool, row: dict[str, Any]) -> dict[str
     except Exception as exc:  # noqa: BLE001 - one unreachable plug must not stop the worker
         plugs.forget(ip)
         log.warning("%s: plug at %s unreachable (%s)", device_name, ip, exc)
+        fields["plug_reachable"] = False
+        fields["last_error"] = f"plug {ip}: {exc}"[:200]
     finally:
         # Heartbeat proves the bridge (not necessarily the plug) is alive.
         fields["last_heartbeat"] = iso_now()
 
-    return {"id": row_id, "fields": fields}
+    return {"id": row_id, "fields": fields, "events": events}
 
 
 # --------------------------------------------------------------------------
@@ -263,17 +301,23 @@ async def run_cycle(api_url: str, worker_key: str, plugs: PlugPool) -> None:
     log.debug("Polling %d subscription(s)", len(rows))
 
     updates: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     for row in rows:
         try:
             change = await process_subscription(plugs, row)
             if change:
                 updates.append(change)
+                events.extend(change.get("events") or [])
         except Exception:  # noqa: BLE001 - keep the loop alive
             log.exception("Failed to process %s", row.get("device_name"))
 
-    if updates:
-        result = await call_api(api_url, worker_key, "workerApply", updates=updates)
-        log.debug("Applied %s row update(s)", result.get("updated"))
+    # Always report a heartbeat, even with zero subscriptions: the cloud monitor
+    # uses bridge_status to prove the bridge is alive independently of the rows.
+    bridge = {"last_heartbeat": iso_now(), "notes": f"{len(rows)} subscription(s) polled"}
+    result = await call_api(
+        api_url, worker_key, "workerApply", updates=updates, bridge=bridge, events=events
+    )
+    log.debug("Applied %s row update(s), %s event(s)", result.get("updated"), result.get("events"))
 
 
 async def main() -> None:
