@@ -47,11 +47,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("bridge")
 
+PID_FILE = Path(__file__).with_name(".worker.pid")
+
 REQUESTS_HEADERS = {"Content-Type": "text/plain;charset=utf-8"}
 STATE_SETTLE_SECONDS = 1.0
 
 # Keep in sync with BACKEND_VERSION in apps-script/Code.gs.
-EXPECTED_BACKEND_VERSION = "2026-11-16"
+EXPECTED_BACKEND_VERSION = "2026-11-17"
 
 
 # --------------------------------------------------------------------------
@@ -283,6 +285,14 @@ async def main() -> None:
 
     log.info("Bridge worker started (poll interval: %ss)", poll_interval)
 
+    # The agent watches this file; it must hold the real interpreter pid, not
+    # the venv launcher's, or the watchdog would see a "dead" worker and start
+    # duplicates every cycle.
+    try:
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        log.warning("Could not write %s", PID_FILE)
+
     try:
         version = await fetch_backend_version(api_url)
         log.info("Apps Script backend version: %s", version)
@@ -308,6 +318,12 @@ async def main() -> None:
             await asyncio.sleep(max(1.0, poll_interval - elapsed))
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Bridge worker stopped")
+    finally:
+        try:
+            if PID_FILE.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                PID_FILE.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
 
 
 if __name__ == "__main__":

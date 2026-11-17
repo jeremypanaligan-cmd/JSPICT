@@ -1,26 +1,26 @@
-# JSP Extender Control - install bridge autostart (and optionally the watchdog).
+# JSP Extender Control - install bridge autostart + silent watchdog.
 #
 # One-time setup on the PC that sits next to the Tapo plugs:
-#   1. Puts a shortcut in the Startup folder that starts the agent at logon.
-#      It runs wscript.exe + start-agent-hidden.vbs, so NO console window ever
-#      appears (no cmd.exe flash).
-#   2. Only with -WithWatchdog: registers the "JSP-Bridge-Watchdog" scheduled
-#      task, which runs watchdog.ps1 every 5 minutes. That task opens a short
-#      PowerShell window each cycle, so it is off by default.
+#   1. Startup shortcut: starts the agent at logon through wscript.exe +
+#      start-agent-hidden.vbs, so no console window ever appears.
+#   2. Scheduled task "JSP-Bridge-Watchdog" (opt out with -NoWatchdog): runs
+#      run-watchdog.vbs through wscript.exe every 5 minutes. wscript is a GUI
+#      process and it starts PowerShell with SW_HIDE, so no window is shown.
 #
 # Run it from this folder:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\install-autostart.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\install-autostart.ps1 -WithWatchdog
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\install-autostart.ps1 -NoWatchdog
 #
 # No administrator rights are needed: everything runs as the current user.
 
-param([switch]$WithWatchdog)
+param([switch]$NoWatchdog)
 
 $ErrorActionPreference = 'Stop'
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcher = Join-Path $here 'start-agent-hidden.vbs'
 $watchdog = Join-Path $here 'watchdog.ps1'
+$watchdogLauncher = Join-Path $here 'run-watchdog.vbs'
 $taskName = 'JSP-Bridge-Watchdog'
 
 foreach ($required in @($launcher, (Join-Path $here 'bridge_agent.py'))) {
@@ -28,8 +28,10 @@ foreach ($required in @($launcher, (Join-Path $here 'bridge_agent.py'))) {
         throw "Missing file: $required (run this script from the worker folder)"
     }
 }
-if ($WithWatchdog -and -not (Test-Path $watchdog)) {
-    throw "Missing file: $watchdog (needed for -WithWatchdog)"
+if (-not $NoWatchdog) {
+    foreach ($required in @($watchdog, $watchdogLauncher)) {
+        if (-not (Test-Path $required)) { throw "Missing file: $required" }
+    }
 }
 
 # 1) Startup shortcut ------------------------------------------------------
@@ -46,18 +48,17 @@ $shortcut.Description = 'Start the JSP Extender bridge agent at logon'
 $shortcut.Save()
 Write-Host "Startup shortcut : $shortcutPath"
 
-# 2) Optional scheduled watchdog task -------------------------------------
-if (-not $WithWatchdog) {
-    Write-Host 'Scheduled task   : skipped (add -WithWatchdog if you want the 5-minute repair)'
+# 2) Scheduled watchdog task (windowless: wscript -> hidden PowerShell) --
+if ($NoWatchdog) {
+    Write-Host 'Scheduled task   : skipped (-NoWatchdog)'
     Write-Host ''
     Write-Host 'Done. The agent starts silently at logon; the bridge worker starts only from the app.'
-    Write-Host 'Remove later: delete the Startup shortcut (shell:startup).'
     return
 }
 
-$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$taskAction = New-ScheduledTaskAction -Execute $powershell `
-    -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $watchdog) `
+$wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$taskAction = New-ScheduledTaskAction -Execute $wscriptExe `
+    -Argument ('"{0}"' -f $watchdogLauncher) `
     -WorkingDirectory $here
 
 # Every 5 minutes, plus one run right after logon.
@@ -71,11 +72,12 @@ $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopI
 
 Register-ScheduledTask -TaskName $taskName -Action $taskAction `
     -Trigger @($repeating, $atLogon) -Settings $taskSettings -Force | Out-Null
-Write-Host "Scheduled task   : $taskName (every 5 minutes + at logon)"
+Write-Host "Scheduled task   : $taskName (every 5 minutes + at logon, windowless)"
 
 # 3) Run one cycle now so a dead worker is fixed immediately ---------------
-& $powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $watchdog
-Write-Host 'Watchdog         : first cycle finished (see worker\watchdog.log)'
+& $wscriptExe $watchdogLauncher
+Start-Sleep -Seconds 8
+Write-Host 'Watchdog         : first cycle started (see worker\watchdog.log)'
 Write-Host ''
 Write-Host 'Done. The agent starts at logon and the watchdog repairs the worker every 5 minutes.'
-Write-Host "Undo: Unregister-ScheduledTask -TaskName $taskName -Confirm:`$false   (and delete the Startup shortcut)"
+Write-Host "Undo: Unregister-ScheduledTask -TaskName $taskName -Confirm:`$false   (and delete the Startup shortcut in shell:startup)"

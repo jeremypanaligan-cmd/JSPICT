@@ -54,7 +54,9 @@ log = logging.getLogger("bridge-agent")
 # Worker process control
 # --------------------------------------------------------------------------
 def python_executable() -> Path:
+    """pythonw keeps the worker windowless; never start it with a console."""
     for candidate in (
+        HERE / ".venv" / "Scripts" / "pythonw.exe",
         HERE / ".venv" / "Scripts" / "python.exe",
         HERE / ".venv" / "bin" / "python",
     ):
@@ -118,14 +120,17 @@ def start() -> dict:
     if not WORKER.exists():
         raise RuntimeError("worker.py is missing next to bridge_agent.py")
 
+    PID_FILE.unlink(missing_ok=True)
     WORKER_LOG.parent.mkdir(parents=True, exist_ok=True)
     with WORKER_LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"\n--- worker started by bridge agent at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         handle.flush()
         flags = 0
         if os.name == "nt":
-            flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+            flags = (
+                getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
             )
         proc = subprocess.Popen(  # noqa: S603 - fixed command, local only
             [str(python_executable()), "-u", str(WORKER)],
@@ -136,16 +141,19 @@ def start() -> dict:
             creationflags=flags,
         )
 
-    PID_FILE.write_text(str(proc.pid), encoding="utf-8")
-    time.sleep(2.0)
+    # Wait for the worker to report its own pid: the venv launcher hands the
+    # real work to a child process, so Popen's pid is not the one to track.
+    for _ in range(40):
+        time.sleep(0.2)
+        pid = read_pid()
+        if pid and is_running(pid):
+            log.info("Started worker pid=%s", pid)
+            return {"ok": True, "running": True, "pid": pid, "already": False}
 
-    if proc.poll() is not None:
-        PID_FILE.unlink(missing_ok=True)
-        tail = "\n".join(log_tail(6))
-        raise RuntimeError(f"worker.py exited immediately (code {proc.returncode}).\n{tail}")
-
-    log.info("Started worker pid=%s", proc.pid)
-    return {"ok": True, "running": True, "pid": proc.pid, "already": False}
+    tail = "\n".join(log_tail(6))
+    PID_FILE.unlink(missing_ok=True)
+    code = proc.poll()
+    raise RuntimeError(f"worker did not come up (exit code {code}).\n{tail}")
 
 
 def stop() -> dict:
