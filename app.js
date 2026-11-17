@@ -11,6 +11,7 @@ const USER_KEY = 'jsp-extender.user';
 const TIMEZONE = 'Asia/Manila';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RENEWAL_PLANS = [
+  { days: 1, amount: 50 },
   { days: 7, amount: 250 },
   { days: 15, amount: 470 },
   { days: 30, amount: 900 }
@@ -20,7 +21,7 @@ const HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const POLL_MS = 20000;
 
 /* Must match BACKEND_VERSION in apps-script/Code.gs — bump both together. */
-const EXPECTED_BACKEND_VERSION = '2026-11-16';
+const EXPECTED_BACKEND_VERSION = '2026-11-17';
 /* Loopback helper (worker/bridge_agent.py) that can start the bridge worker. */
 const DEFAULT_AGENT_URL = 'http://127.0.0.1:8765';
 
@@ -29,6 +30,7 @@ const DEFAULT_AGENT_URL = 'http://127.0.0.1:8765';
 const $ = (selector, root = document) => root.querySelector(selector);
 const pad = (value) => String(value).padStart(2, '0');
 const ICONS = { success: '#i-check', warn: '#i-alert', error: '#i-alert' };
+const dayLabel = (days) => `${days} day${Number(days) === 1 ? '' : 's'}`;
 
 const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -591,13 +593,13 @@ function updateRenewPreview() {
   const active = !isExpiredAt(row);
   const expiry = toDate(row.expires_at);
 
-  renewLength.textContent = `${plan.days} days`;
+  renewLength.textContent = dayLabel(plan.days);
   renewPreview.textContent = formatDateTime(new Date(base.getTime() + plan.days * DAY_MS));
 
   renewExtendHint.textContent = active && expiry
-    ? `Adds ${plan.days} days on top of ${formatDateTime(expiry)}.`
+    ? `Adds ${dayLabel(plan.days)} on top of ${formatDateTime(expiry)}.`
     : 'Not available while this subscription is expired.';
-  renewResetHint.textContent = `Starts a fresh ${plan.days}-day period from now.`;
+  renewResetHint.textContent = `Starts a fresh ${dayLabel(plan.days)} period from now.`;
 }
 
 function openRenewModal(row) {
@@ -649,7 +651,7 @@ renewForm.addEventListener('submit', async (event) => {
     await api('renew', { id: row.id, mode, days: plan.days, amount });
     closeModal(renewModal);
     await loadSubscriptions({ silent: true });
-    toast(`${row.device_name || 'Extender'} renewed for ${plan.days} days — plug power ON requested.`, 'success');
+    toast(`${row.device_name || 'Extender'} renewed for ${dayLabel(plan.days)} — plug power ON requested.`, 'success');
   } catch (error) {
     if (handleAuthError(error)) return;
     showError(renewError, error.message || 'Renewal failed.');
@@ -789,7 +791,7 @@ async function loadHistory() {
         const days = Number(entry.days) || null;
         const plan = RENEWAL_PLANS.find((item) => item.days === days) || null;
         const planLabel = days
-          ? (plan ? `${plan.days} days · ₱${plan.amount}` : `${days} days`)
+          ? (plan ? `${dayLabel(plan.days)} · ₱${plan.amount}` : dayLabel(days))
           : 'Plan not recorded';
         return `
           <li class="history-item">

@@ -56,11 +56,11 @@ const ALERT_REPEAT_MS = 6 * 60 * 60 * 1000;
  * footer and the bridge worker log compare against it, so a stale deployment
  * shows up immediately instead of looking like a bug.
  */
-const BACKEND_VERSION = '2026-11-16';
+const BACKEND_VERSION = '2026-11-17';
 
 const TIMEZONE = 'Asia/Manila';
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
-const RENEWAL_PLANS = { 7: 250, 15: 470, 30: 900 };
+const RENEWAL_PLANS = { 1: 50, 7: 250, 15: 470, 30: 900 };
 const DEFAULT_RENEWAL_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -487,7 +487,7 @@ function renew(body) {
   const hasDays = body.days !== null && body.days !== undefined && body.days !== '';
   const requestedDays = hasDays ? Number(body.days) : DEFAULT_RENEWAL_DAYS;
   if (hasDays && !RENEWAL_PLANS[requestedDays]) {
-    fail('Renewal length must be 7, 15 or 30 days.', 'ERROR');
+    fail('Renewal length must be 1, 7, 15 or 30 days.', 'ERROR');
   }
   const days = hasDays ? requestedDays : DEFAULT_RENEWAL_DAYS;
 
