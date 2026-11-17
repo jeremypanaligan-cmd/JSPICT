@@ -22,6 +22,16 @@
  *                           expires_at | last_renewed_at | desired_power_state |
  *                           actual_power_state | last_heartbeat | created_at
  *   renewal_logs            id | subscription_id | renewed_at | previous_expiry | new_expiry | amount_paid | days
+ *   override_logs           id | subscription_id | at | source | from_state | to_state | actor
+ *
+ * MONITORING
+ * `setup()` installs a 5-minute time trigger that runs `monitor()`:
+ *   - marks ACTIVE rows whose expires_at has passed as EXPIRED (even when the
+ *     bridge PC is off), so the app never shows paid-up service that is not;
+ *   - alerts when the bridge heartbeat is stale, at most once every 6 hours.
+ * Alerts go to Telegram when TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set,
+ * otherwise to ALERT_EMAIL (default: the script owner). Configure them with
+ * `configureAlerts('bot-token', 'chat-id')` and check with `testAlert()`.
  *
  * The `days` column is added automatically by `setup` and by the first `renew`
  * call, so an older renewal_logs tab keeps working.
@@ -33,8 +43,13 @@
 const TABS = {
   users: 'user',
   subscriptions: 'extender_subscriptions',
-  logs: 'renewal_logs'
+  logs: 'renewal_logs',
+  overrides: 'override_logs'
 };
+
+const MONITOR_MINUTES = 5;
+const HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+const ALERT_REPEAT_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Bump this whenever this file changes, then redeploy a new version. The PWA
@@ -88,7 +103,11 @@ function doPost(e) {
       case 'renew':
         return sendJson(renew(body));
       case 'setPower':
-        return sendJson(setPower(body));
+        return sendJson(setPower(body, session));
+      case 'overrides':
+        return sendJson({ ok: true, rows: overrideLogs() });
+      case 'monitorNow':
+        return sendJson({ ok: true, result: monitor() });
       case 'saveSubscription':
         return sendJson(saveSubscription(body));
       default:
@@ -107,9 +126,11 @@ function doPost(e) {
 function setup() {
   authSecret();
   ensureColumn(TABS.logs, 'days');
+  ensureTab(TABS.overrides, OVERRIDE_HEADERS);
   const key = workerKey();
   Logger.log('Spreadsheet: ' + SpreadsheetApp.getActiveSpreadsheet().getName());
   Logger.log('WORKER_KEY (put this in worker/.env): ' + key);
+  Logger.log('Monitor: ' + installMonitor());
   Logger.log('Next: Deploy → New deployment → Web app (Execute as: Me, Access: Anyone).');
 }
 
@@ -276,6 +297,53 @@ function appendObject(sheetName, record) {
   sheet.appendRow(headers.map(function (header) {
     return record[header] !== undefined && record[header] !== null ? record[header] : '';
   }));
+}
+
+const OVERRIDE_HEADERS = ['id', 'subscription_id', 'at', 'source', 'from_state', 'to_state', 'actor'];
+
+/** Create a tab (with headers) when it does not exist yet. */
+function ensureTab(name, headers) {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = book.getSheetByName(name);
+  if (!sheet) {
+    sheet = book.insertSheet(name);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+  return sheet;
+}
+
+/** Audit trail for every manual power override made from the app. */
+function recordOverride(target, fromOn, toOn, actor) {
+  ensureTab(TABS.overrides, OVERRIDE_HEADERS);
+  appendObject(TABS.overrides, {
+    id: 'OVR-' + Utilities.getUuid().slice(0, 8).toUpperCase(),
+    subscription_id: String(target.id || '').trim(),
+    at: isoNow(),
+    source: 'app',
+    from_state: fromOn,
+    to_state: toOn,
+    actor: actor ? String(actor) : 'unknown'
+  });
+}
+
+function overrideLogs() {
+  if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TABS.overrides)) return [];
+  return readTable(TABS.overrides)
+    .map(function (row) {
+      return {
+        id: String(row.id || '').trim(),
+        subscription_id: String(row.subscription_id || '').trim(),
+        at: isoValue(row.at),
+        source: String(row.source || '').trim(),
+        from_state: toBool(row.from_state),
+        to_state: toBool(row.to_state),
+        actor: String(row.actor || '').trim()
+      };
+    })
+    .sort(function (a, b) {
+      return String(b.at).localeCompare(String(a.at));
+    })
+    .slice(0, 200);
 }
 
 /** Add a trailing header to a tab when it is missing (older sheets). */
@@ -480,9 +548,10 @@ function renew(body) {
   };
 }
 
-function setPower(body) {
+function setPower(body, session) {
   const target = findSubscription(body.id);
   const on = toBool(body.on);
+  const previous = toBool(target.desired_power_state);
   const sheet = sheetByName(TABS.subscriptions);
   const headers = getHeaders(sheet);
 
@@ -490,6 +559,9 @@ function setPower(body) {
   lock.waitLock(15000);
   try {
     writeFields(sheet, target.__row, headers, { desired_power_state: on });
+    if (previous !== on) {
+      recordOverride(target, previous, on, session && session.u);
+    }
   } finally {
     lock.releaseLock();
   }
@@ -596,4 +668,153 @@ function workerApply(updates) {
   }
 
   return { ok: true, updated: updated };
+}
+
+/* -------------------------------- monitoring ------------------------------- */
+
+/**
+ * Runs from a 5-minute time trigger (see installMonitor). Works without the
+ * bridge PC: expiries are recorded here, and the plug cut is queued through
+ * desired_power_state for the worker to apply when it comes back.
+ */
+function monitor() {
+  const now = new Date();
+  const expired = expireOverdue(now);
+  const rows = readTable(TABS.subscriptions);
+  const bridge = bridgeHealth(rows, now.getTime());
+
+  const messages = [];
+  if (expired.length) {
+    messages.push('Marked EXPIRED: ' + expired.join(', ') + ' (plug cut queued for the bridge).');
+  }
+
+  const pending = rows.filter(function (row) {
+    return toBool(row.desired_power_state) !== toBool(row.actual_power_state);
+  });
+
+  if (rows.length && !bridge.online) {
+    messages.push(
+      'Bridge OFFLINE — last heartbeat ' +
+        (bridge.lastSeen ? Utilities.formatDate(bridge.lastSeen, TIMEZONE, 'yyyy-MM-dd HH:mm') + ' (' + bridge.ageMinutes + ' min ago)' : 'never') +
+        '. Plug control is paused' +
+        (pending.length ? '; ' + pending.length + ' plug command(s) queued.' : '.')
+    );
+  }
+
+  if (!messages.length) {
+    clearAlertState();
+    return { expired: expired, online: bridge.online, pending: pending.length, alerted: false };
+  }
+
+  const signature = (bridge.online ? 'online' : 'offline') + '|' + expired.join(',');
+  const props = scriptProps();
+  const lastSignature = props.getProperty('ALERT_SIGNATURE') || '';
+  const lastAt = Number(props.getProperty('ALERT_AT') || 0);
+
+  if (lastSignature === signature && now.getTime() - lastAt < ALERT_REPEAT_MS) {
+    return { expired: expired, online: bridge.online, pending: pending.length, alerted: false, suppressed: true };
+  }
+
+  notify(bridge.online ? 'expiry update' : 'bridge offline', messages.join('\n'));
+  props.setProperty('ALERT_SIGNATURE', signature);
+  props.setProperty('ALERT_AT', String(now.getTime()));
+
+  return { expired: expired, online: bridge.online, pending: pending.length, alerted: true };
+}
+
+/** Flip overdue ACTIVE rows to EXPIRED and queue the plug cut. */
+function expireOverdue(now) {
+  const overdue = readTable(TABS.subscriptions).filter(function (row) {
+    const expires = parseDate(row.expires_at);
+    return expires && expires.getTime() <= now.getTime() &&
+      String(row.status || '').trim().toUpperCase() === 'ACTIVE';
+  });
+  if (!overdue.length) return [];
+
+  const sheet = sheetByName(TABS.subscriptions);
+  const headers = getHeaders(sheet);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    overdue.forEach(function (row) {
+      writeFields(sheet, row.__row, headers, { status: 'EXPIRED', desired_power_state: false });
+    });
+  } finally {
+    lock.releaseLock();
+  }
+
+  return overdue.map(function (row) { return String(row.id || '').trim(); });
+}
+
+function bridgeHealth(rows, nowMs) {
+  let lastSeen = null;
+  rows.forEach(function (row) {
+    const beat = parseDate(row.last_heartbeat);
+    if (beat && (!lastSeen || beat.getTime() > lastSeen.getTime())) lastSeen = beat;
+  });
+  const ageMs = lastSeen ? nowMs - lastSeen.getTime() : null;
+  return {
+    online: Boolean(lastSeen) && ageMs <= HEARTBEAT_STALE_MS,
+    lastSeen: lastSeen,
+    ageMinutes: lastSeen ? Math.round(ageMs / 60000) : null
+  };
+}
+
+function clearAlertState() {
+  const props = scriptProps();
+  props.deleteProperty('ALERT_SIGNATURE');
+  props.deleteProperty('ALERT_AT');
+}
+
+/** Telegram when configured, otherwise email to ALERT_EMAIL / the script owner. */
+function notify(subject, message) {
+  const props = scriptProps();
+  const text = '[JSP Extender] ' + subject + '\n\n' + message + '\n\n' + isoNow();
+  const token = props.getProperty('TELEGRAM_BOT_TOKEN');
+  const chatId = props.getProperty('TELEGRAM_CHAT_ID');
+
+  if (token && chatId) {
+    try {
+      UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+        method: 'post',
+        payload: { chat_id: chatId, text: text },
+        muteHttpExceptions: true
+      });
+      return;
+    } catch (error) {
+      Logger.log('Telegram alert failed: ' + error);
+    }
+  }
+
+  const email = props.getProperty('ALERT_EMAIL') || Session.getEffectiveUser().getEmail();
+  if (email) {
+    try {
+      MailApp.sendEmail(email, '[JSP Extender] ' + subject, text);
+    } catch (error) {
+      Logger.log('Email alert failed: ' + error);
+    }
+  }
+}
+
+/** Run once from the editor: configureAlerts('123:ABC', '123456789') */
+function configureAlerts(telegramToken, telegramChatId, email) {
+  const props = scriptProps();
+  if (telegramToken) props.setProperty('TELEGRAM_BOT_TOKEN', String(telegramToken).trim());
+  if (telegramChatId) props.setProperty('TELEGRAM_CHAT_ID', String(telegramChatId).trim());
+  if (email) props.setProperty('ALERT_EMAIL', String(email).trim());
+  return 'Alerts configured. Run testAlert() to confirm delivery.';
+}
+
+function testAlert() {
+  notify('test alert', 'If you can read this, bridge alerts reach you.');
+  return 'Test alert sent.';
+}
+
+/** Install (or refresh) the 5-minute monitor trigger. */
+function installMonitor() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'monitor') ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger('monitor').timeBased().everyMinutes(MONITOR_MINUTES).create();
+  return 'monitor() runs every ' + MONITOR_MINUTES + ' minutes';
 }
